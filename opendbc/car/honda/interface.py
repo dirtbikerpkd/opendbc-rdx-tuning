@@ -161,6 +161,7 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.ACURA_RDX_3G:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.2], [0.06]]
+      CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 2000]  # alpha longitudinal pedal tuning
 
     elif candidate == CAR.HONDA_ODYSSEY:
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.28], [0.08]]
