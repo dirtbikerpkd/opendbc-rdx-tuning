@@ -183,6 +183,12 @@ class CarInterface(CarInterfaceBase):
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4095], [0, 4095]]  # TODO: determine if there is a dead zone at the top end
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.2], [0.06]]
       CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 2200]
+      # Was unoverridden (stock 0.1s default). Same Acura Bosch lineage as ACURA_MDX_4G and
+      # ACURA_TLX_2G_MMR, both explicitly set to 0.15s -- and even the generic "else" branch for
+      # any unlisted Bosch Honda uses 0.15s. RDX_3G was the outlier at a shorter delay than
+      # everything else in this file, which under-compensates the planner for actual actuator lag
+      # and can present as late/hesitant turn-in. Matches reported symptom 2026-08-25.
+      ret.steerActuatorDelay = 0.15
 
     elif candidate == CAR.ACURA_RDX_3G_MMR:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4076], [0, 4076]]
