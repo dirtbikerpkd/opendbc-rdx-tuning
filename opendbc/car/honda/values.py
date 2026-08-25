@@ -49,6 +49,16 @@ class CarControllerParams:
     self.STEER_LOOKUP_BP = [v * -1 for v in CP.lateralParams.torqueBP][1:][::-1] + list(CP.lateralParams.torqueBP)
     self.STEER_LOOKUP_V = [v * -1 for v in CP.lateralParams.torqueV][1:][::-1] + list(CP.lateralParams.torqueV)
 
+    if CP.carFingerprint == CAR.ACURA_RDX_3G:
+      # Doubled from the stock/shared Honda default of 3 (300 units/sec) to 6 (600 units/sec).
+      # Log analysis (2026-08-25, 103 drive segments) showed commanded torque pinning near
+      # STEER_MAX in 27.8% of active-steering samples with no corresponding EPS motor
+      # saturation -- consistent with the ramp-rate limiter, not the ceiling, being the
+      # binding constraint. Kept UP/DOWN symmetric rather than introducing a new asymmetry
+      # that's never been evaluated.
+      self.STEER_DELTA_UP = 6
+      self.STEER_DELTA_DOWN = 6
+
 
 class HondaSafetyFlags(IntFlag):
   ALT_BRAKE = 1
