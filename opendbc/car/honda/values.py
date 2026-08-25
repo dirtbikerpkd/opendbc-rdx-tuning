@@ -503,6 +503,11 @@ HONDA_BOSCH_CANFD = frozenset(c for c in CAR if c.config.flags & HondaFlags.BOSC
 
 STEER_THRESHOLD = {
   # default is 1200, overrides go here
+  # Raised from stock 1200: drive log analysis (2026-08-25) showed frequent driver-override
+  # onsets (~20/min) at near-zero steering angle with driver torque clustering right at the
+  # 1200 boundary -- consistent with light/incidental hand-on-wheel pressure false-triggering
+  # override during easy driving, not genuine takeover. First test of this constant for this car.
+  CAR.ACURA_RDX_3G: 1500,
   CAR.ACURA_RDX: 400,
   CAR.HONDA_CRV_EU: 400,
   CAR.HONDA_ACCORD_11G: 600,
