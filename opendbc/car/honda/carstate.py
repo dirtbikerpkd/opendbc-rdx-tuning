@@ -152,6 +152,24 @@ class CarState(CarStateBase, CarStateExt):
       ret.steerFaultPermanent = False
       ret.steerFaultTemporary = False
 
+    if self.CP.carFingerprint == CAR.ACURA_RDX_3G and steer_status == "LOW_SPEED_LOCKOUT":
+      # LOW_SPEED_LOCKOUT is excluded from steerFaultTemporary above (this car has neither
+      # BOSCH_ALT_RADAR nor BOSCH_CANFD, so it takes the unconditional-exclusion branch), on the
+      # assumption -- true for the cars that branch was written for -- that this status only
+      # occurs genuinely at low speed and is safe to ignore. Confirmed false for this car via CAN
+      # log analysis 2026-09-03 (RDX-Project/rdx-eps-tuning-project.md section 2n): STEER_MOTOR_TORQUE
+      # decays to ~0 over 8-15s of sustained steering while STEER_STATUS reports
+      # LOW_SPEED_LOCKOUT at 58-80mph -- real, silent loss of physical EPS assist, not a
+      # low-speed condition. Because it wasn't flagged as a fault, openpilot kept commanding
+      # into a motor that had already stopped responding instead of disengaging/alerting; the
+      # driver had to notice on their own and manually cycle the LKAS button to restore assist.
+      # Mirrors the existing BOSCH_ALT_RADAR/BOSCH_CANFD branch's vEgo-gated pattern above,
+      # applied to this car specifically via carFingerprint rather than by adding those flags
+      # (which gate several unrelated behaviors elsewhere in carcontroller.py/hondacan.py).
+      min_steer_speed = max(CarControllerParams.STEER_GLOBAL_MIN_SPEED, self.CP.minSteerSpeed)
+      if ret.vEgo >= min_steer_speed:
+        ret.steerFaultTemporary = True
+
     # All Honda EPS cut off slightly above standstill, some much higher
     # Don't alert in the near-standstill range, but alert for per-vehicle configured minimums above that
     if CarControllerParams.STEER_GLOBAL_MIN_SPEED < ret.vEgo < (self.CP.minSteerSpeed + 0.5):
