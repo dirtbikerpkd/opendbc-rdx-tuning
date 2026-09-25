@@ -49,11 +49,21 @@ from opendbc.car.common.conversions import Conversions as CV
 FACTOR_RATE = 0.01
 ALPHA_RATE = 0.001
 FACTOR_MIN = 0.5
-FACTOR_MAX = 100.0
+FACTOR_MAX = 3.0  # personal-fork guard (upstream 100.0): a runaway table must not be able to multiply a request 100x
 ALPHA_MAX = 0.1
 LAT_ALPHA_MAX = 1.5
 # weight on (request - shaped) / |request| added to curvature error for learning
 LEARN_DELIVERY_GAIN = 0.5
+# Personal-fork output guard (not in mvl-boston/opendbc): Honda's panda safety has no torque magnitude/rate
+# backstop, so bound what the learner can do to the controller's request. The shaped magnitude may never
+# flip the request's direction and may never exceed AMP_CAP * |request| + AMP_ABS (and 1.0). Replaying 251 min
+# of real ACURA_RDX_3G rides through the unguarded learner gave shaped/request p99 ~10x and 0.2-7% of active
+# ticks with the opposite sign.
+AMP_CAP = 3.0
+AMP_ABS = 0.1
+# The lat axis divides by maxLateralAccel. ACURA_RDX_3G's fitted MAX_LAT_ACCEL_MEASURED is 0.339 m/s^2, far below
+# the ~1.5-3 the axis was designed around (any real turn pins it at +-100%), so floor the scale.
+MIN_MAX_LAT_ACCEL = 1.0
 # below this speed curvature*v^2 is too small a fraction of maxLateralAccel to learn from
 MIN_LEARN_SPEED = 1.0  # m/s
 # torque requests this small have no usable direction for the output sign
@@ -210,7 +220,7 @@ class SteerTorqueLearner:
   def __init__(self, max_lat_accel, param_get=None):
     # maxLateralAccel is 0 for cars without torque data; fall back to a typical value so the
     # percentage axis stays finite rather than disabling the learner outright
-    self.max_lat_accel = float(max_lat_accel) if max_lat_accel and max_lat_accel > 0.1 else 1.8
+    self.max_lat_accel = max(float(max_lat_accel), MIN_MAX_LAT_ACCEL) if max_lat_accel and max_lat_accel > 0.1 else 1.8
     self.lat = LearnedAxis("lat", LAT_SLOTS, LAT_FROZEN, LAT_KEY_FMT, param_get, alpha_max=LAT_ALPHA_MAX)
     if _load(param_get, LAT_AXIS_FRAME_KEY, 1) < LAT_AXIS_FRAME_VERSION:
       _reset_lat_axis_to_identity(self.lat)
@@ -293,7 +303,7 @@ class SteerTorqueLearner:
     self.blended_speed_factor = speed_f
 
     alpha_sum = lat_a + torque_a + speed_a
-    shaped_mag = _clip(torque_mag * lat_f * torque_f * speed_f + alpha_sum, -1.0, 1.0)
+    shaped_mag = _clip(torque_mag * lat_f * torque_f * speed_f + alpha_sum, 0.0, min(1.0, AMP_CAP * torque_mag + AMP_ABS))
     output = sign * shaped_mag
 
     self.curv_err = path_learning_curv_err(desired_lat_accel, actual_lat_accel, self.max_lat_accel)

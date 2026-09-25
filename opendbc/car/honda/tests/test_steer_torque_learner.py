@@ -2,8 +2,9 @@ import math
 import unittest
 
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda.steer_torque_learner import (ALPHA_MAX, FACTOR_MAX, FACTOR_MIN, LAT_ALPHA_MAX, LAT_AXIS_FRAME_KEY,
-                                                    LAT_SLOTS, SPEED_SLOTS, TORQUE_SLOTS, SteerTorqueLearner,
+from opendbc.car.honda.steer_torque_learner import (ALPHA_MAX, AMP_ABS, AMP_CAP, FACTOR_MAX, FACTOR_MIN, LAT_ALPHA_MAX,
+                                                    LAT_AXIS_FRAME_KEY, LAT_SLOTS, MIN_MAX_LAT_ACCEL, SPEED_SLOTS,
+                                                    TORQUE_SLOTS, SteerTorqueLearner,
                                                     lat_pct_depart_frame, path_learning_curv_err)
 
 MAX_LAT_ACCEL = 1.8
@@ -195,17 +196,17 @@ class TestSteerTorqueLearner(unittest.TestCase):
     assert step(learner, 0.9, v, 0.9, 0.9) == 1.0
     assert step(learner, -0.9, v, -0.9, -0.9) == -1.0
 
-  def test_negative_alpha_sum_inverts_output(self):
+  def test_negative_alpha_sum_floors_output_at_zero(self):
     v = 50 * CV.MPH_TO_MS
     learner = make_learner()
     learner.lat.alphas[50] = -LAT_ALPHA_MAX
     learner.torque.alphas[50] = -ALPHA_MAX
     learner.speed.alphas[50] = -ALPHA_MAX
     out = step(learner, 0.5, v, desired_la=0.9, actual_la=0.9)
-    assert out < 0.0
-    assert out == -1.0  # product 0.5 + alpha sum -1.7 clips to -1.0
+    # personal-fork guard: a dominant negative alpha stack floors the output at 0, it never inverts the request
+    assert out == 0.0
 
-  def test_poisoned_alphas_can_drive_output_negative(self):
+  def test_poisoned_alphas_cannot_drive_output_negative(self):
     v = 17 * CV.MPH_TO_MS
     store = {}
     for key in SteerTorqueLearner.param_keys():
@@ -218,7 +219,7 @@ class TestSteerTorqueLearner(unittest.TestCase):
     store[LAT_AXIS_FRAME_KEY] = 2
     learner = make_learner(store)
     out = step(learner, 1.0, v, desired_la=0.5, actual_la=0.5, steering_angle_deg=12.0, steering_rate_deg=4.0)
-    assert out < 0.0
+    assert out == 0.0  # personal-fork guard: poisoned alphas cannot drive the output against the request
 
   def test_path_learning_curv_err_same_sign_turns(self):
     assert path_learning_curv_err(1.2, 0.9, MAX_LAT_ACCEL) > 0.0
@@ -254,3 +255,26 @@ class TestSteerTorqueLearner(unittest.TestCase):
       for pos in axis.positions:
         assert FACTOR_MIN <= axis.factors[pos] <= FACTOR_MAX
         assert -alpha_lim <= axis.alphas[pos] <= alpha_lim
+
+  def test_output_never_opposes_request_and_amplification_is_capped(self):
+    v = 40 * CV.MPH_TO_MS
+    for sign in (1.0, -1.0):
+      for req in (0.02, 0.05, 0.1, 0.3, 0.6, 0.95):
+        for extreme in ("high", "low"):
+          store = {}
+          for key in SteerTorqueLearner.param_keys():
+            if "LatAlpha" in key:
+              store[key] = LAT_ALPHA_MAX if extreme == "high" else -LAT_ALPHA_MAX
+            elif "Alpha" in key:
+              store[key] = ALPHA_MAX if extreme == "high" else -ALPHA_MAX
+            else:
+              store[key] = FACTOR_MAX if extreme == "high" else FACTOR_MIN
+          store[LAT_AXIS_FRAME_KEY] = 2
+          out = step(make_learner(store), sign * req, v, desired_la=0.9, actual_la=0.9)
+          assert out * sign >= 0.0
+          assert abs(out) <= min(1.0, AMP_CAP * req + AMP_ABS) + 1e-9
+
+  def test_max_lat_accel_is_floored(self):
+    assert SteerTorqueLearner(0.339, None).max_lat_accel == MIN_MAX_LAT_ACCEL  # ACURA_RDX_3G fitted value
+    assert SteerTorqueLearner(2.5, None).max_lat_accel == 2.5
+    assert SteerTorqueLearner(0.0, None).max_lat_accel == 1.8  # unchanged fallback for cars without torque data
