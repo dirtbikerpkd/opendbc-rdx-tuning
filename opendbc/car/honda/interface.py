@@ -16,12 +16,18 @@ from openpilot.common.params import Params, UnknownKeyName
 TransmissionType = structs.CarParams.TransmissionType
 
 
-def _use_bosch_a_radar(candidate, docs: bool) -> bool:
+def _use_bosch_a_radar(candidate, docs: bool, alpha_long: bool) -> bool:
   # TODO: remove this toggle+param once the 16-slot Bosch-A decoder (see radar_interface.py) has been
   # field-validated across all HONDA_BOSCH_A platforms, then make radarUnavailable unconditional here.
   if candidate not in HONDA_BOSCH_A:
     return False
   if docs:
+    return False
+  # Personal-fork addition (not in mvl-boston/opendbc#669): with openpilot longitudinal on, init() silences the
+  # radar ECU (0x18DAB0F1, UDS COMMUNICATION_CONTROL disable rx+tx), which also stops its object list -- confirmed
+  # on ACURA_RDX_3G from drive logs, only the first ~1 min after boot carries objects. Enabling the decoder then
+  # would read an empty bank while marking radar as available. Only decode when the radar is actually left alive.
+  if alpha_long:
     return False
   try:
     return Params().get_bool("HondaBoschARadar")
@@ -65,7 +71,7 @@ class CarInterface(CarInterfaceBase):
       # Disable the radar and let openpilot control longitudinal
       # WARNING: THIS DISABLES AEB!
       # If Bosch radarless, this blocks ACC messages from the camera
-      if _use_bosch_a_radar(candidate, docs):
+      if _use_bosch_a_radar(candidate, docs, alpha_long):
         ret.radarUnavailable = False
       ret.alphaLongitudinalAvailable = True
       ret.openpilotLongitudinalControl = alpha_long
