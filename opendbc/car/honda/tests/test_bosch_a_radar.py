@@ -651,16 +651,19 @@ class TestVrel:
 
   @pytest.mark.parametrize(
     ('direct_raw', 'range_raw', 'rawca', 'expected'),
-    [(0, 974, 528, -13.5), (BOSCH_A_DIRECT_VREL_MAX_RAW, 1027, 472, 13.5)],
+    # ratio estimate beyond the rail extends it (-29.5 / +31.2 m/s); ratio estimate inside the rail never
+    # contradicts it (stays at the +/-13.5 rail value).
+    [(0, 974, 528, -29.4755), (BOSCH_A_DIRECT_VREL_MAX_RAW, 1027, 472, 31.1709),
+     (0, 990, 504, -13.5), (BOSCH_A_DIRECT_VREL_MAX_RAW, 1010, 496, 13.5)],
   )
-  def test_range_ratio_does_not_extend_direct_vrel_rails(self, direct_raw, range_raw, rawca, expected):
+  def test_range_ratio_extends_but_never_contradicts_direct_vrel_rails(self, direct_raw, range_raw, rawca, expected):
     ri = make_radar_interface()
     ri.update(sweep(0, 0, 0x7, 1000, 1024, 1, 0, with_aux=True,
                     direct_vrel_raw=direct_raw, direct_vrel_uncertainty_raw=80, rawca=500))
     rr = ri.update(sweep(0, 1, 0x7, range_raw, 1024, 3, 50_000_000, with_aux=True,
                          direct_vrel_raw=direct_raw, direct_vrel_uncertainty_raw=80, rawca=rawca))
     assert len(rr.points) == 1
-    assert rr.points[0].vRel == pytest.approx(expected)
+    assert rr.points[0].vRel == pytest.approx(expected, abs=0.01)
 
   def test_first_sighting_vrel_is_zero(self):
     ri = make_radar_interface()
@@ -1133,3 +1136,51 @@ def test_bosch_a_gate_open_to_other_bosch_a_platforms(car):
 def test_bosch_a_gate_stays_closed_for_non_bosch_a_platforms(car):
   cp = _CLOSED_BOSCH_A_CPS[car]
   assert cp.radarUnavailable is True
+
+
+# --- 6. AUX relative-velocity clamp rails ------------------------------------------------------------------
+# Raw 0 and raw 1728 are the clamp rails of the 11-bit field (+/-13.5 m/s), not measurements. On a 2026-09-30
+# drive 25% of all valid AUX frames sat at raw 0 (53% above 13.5 m/s ego speed) while neighbouring raw values
+# appeared ~8 times each, and the independent range-ratio field showed those objects closing at 20-37 m/s.
+# Publishing the pinned -13.5 made oncoming cars look like 3 m/s same-direction leads to radard.
+
+class TestDirectVrelRails:
+  def test_saturated_oncoming_object_is_extended_by_the_range_ratio(self):
+    ri = make_radar_interface()
+    ri.update(sweep(0, 0, 0x7, 1000, 1024, 1, 0))  # 54.1 m, birth sample
+    # next sweep: 51.8 m, i.e. -2.28 m in 1/15 s = ~-34 m/s closing; direct U11 pinned at the raw-0 rail.
+    # ratio = previous/current range = 54.12/51.84 = 1.044 -> raw = (1.044 - 0.5) / 0.001 = 544
+    rr = ri.update(sweep(0, 1, 0x7, 960, 1024, 3, 66_666_667, with_aux=True, rawca=544,
+                        direct_vrel_raw=0, direct_vrel_uncertainty_raw=0))
+    assert len(rr.points) == 1
+    assert rr.points[0].vRel < -25.0  # ratio estimate past the rail, not the pinned -13.5
+
+  def test_extension_is_bounded_by_the_decoder_rate_limit(self):
+    ri = make_radar_interface()
+    ri.update(sweep(0, 0, 0x7, 1000, 1024, 1, 0))
+    # an absurd ratio (raw 1000 -> 1.5) would imply a huge rate; the published value must stay within the limit
+    rr = ri.update(sweep(0, 1, 0x7, 1000, 1024, 3, 66_666_667, with_aux=True, rawca=1000,
+                        direct_vrel_raw=0, direct_vrel_uncertainty_raw=0))
+    for p in rr.points:
+      assert abs(p.vRel) <= BOSCH_A_FALLBACK_RANGE_RATE_MAX_MPS
+
+  def test_rail_without_a_usable_ratio_is_withheld_not_published_as_the_rail_value(self):
+    ri = make_radar_interface()
+    ri.update(sweep(0, 0, 0x7, 1000, 1024, 1, 0))
+    rr = ri.update(sweep(0, 1, 0x7, 960, 1024, 3, 66_666_667, with_aux=True,
+                        direct_vrel_raw=0, direct_vrel_uncertainty_raw=0))  # rawca defaults to the invalid sentinel
+    assert len(rr.points) == 0
+
+  def test_rail_with_degraded_measurement_is_withheld(self):
+    ri = make_radar_interface()
+    ri.update(sweep(0, 0, 0x7, 1000, 1024, 1, 0))
+    rr = ri.update(sweep(0, 1, 0x7, 960, 1024, 3, 66_666_667, with_aux=True, rawca=544,
+                        direct_vrel_raw=0, direct_vrel_uncertainty_raw=0, range_sigma_raw=8))
+    assert len(rr.points) == 0
+
+  def test_values_just_inside_the_rails_are_unchanged_by_the_ratio(self):
+    ri = make_radar_interface()
+    ri.update(sweep(0, 0, 0x7, 1000, 1024, 1, 0))
+    rr = ri.update(sweep(0, 1, 0x7, 960, 1024, 3, 66_666_667, with_aux=True, rawca=544,
+                        direct_vrel_raw=1, direct_vrel_uncertainty_raw=0))
+    assert rr.points[0].vRel == pytest.approx((1 - 864) / 64.0)
