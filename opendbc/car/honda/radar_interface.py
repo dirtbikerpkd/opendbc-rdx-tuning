@@ -552,8 +552,12 @@ class RadarInterface(RadarInterfaceBase):
       # A true birth observation (no previous accepted range yet) can never mature into a published
       # point this cycle regardless of vRel source -- `matured` below requires a second sample -- so
       # only intercept once a fallback derivative would actually have something to poison.
-      u11_and_ratio_unavailable = (direct_vrel is None and (ratio_vrel is None or degraded) and
-                                   previous_sample is not None)
+      # A U11 pinned on a clamp rail only says "at least 13.5 m/s"; with no usable ratio to resolve it
+      # (missing or degraded), treat the velocity as unavailable too instead of publishing the rail.
+      u11_rail_unresolved = direct_vrel is not None and direct_vrel_raw in (
+        BOSCH_A_DIRECT_VREL_MIN_RAW, BOSCH_A_DIRECT_VREL_MAX_RAW)
+      u11_and_ratio_unavailable = ((direct_vrel is None or u11_rail_unresolved) and
+                                   (ratio_vrel is None or degraded) and previous_sample is not None)
       if u11_and_ratio_unavailable:
         trusted_fresh = (track.last_trusted_vrel is not None and track.last_trusted_vrel_nanos is not None and
                          (now - track.last_trusted_vrel_nanos) * 1e-9 <= BOSCH_A_STALE_S)
@@ -588,6 +592,19 @@ class RadarInterface(RadarInterfaceBase):
       # this point whenever neither native U11 nor the ratio field is usable.
       if direct_vrel is not None:
         vRel = direct_vrel
+        # The U11 endpoints are clamp rails, not measurements: the real speed is AT LEAST 13.5 m/s in
+        # that direction. On the 2026-09-30 drive raw 0 was 25% of all valid AUX frames (53% above 13.5
+        # m/s ego speed) versus ~8 frames per neighbouring raw value, and the range-ratio field showed
+        # those objects closing at 20-37 m/s (oncoming traffic, stationary objects at speed). Publishing
+        # the pinned -13.5 made an oncoming car look like a 3 m/s same-direction lead to radard (false
+        # FCW). Let the independent ratio estimate extend the value past the rail it already proves,
+        # but never contradict it, and keep it inside the decoder's existing rate limit.
+        if ratio_vrel is not None and not degraded and math.isfinite(ratio_vrel):
+          extended = max(-BOSCH_A_FALLBACK_RANGE_RATE_MAX_MPS, min(BOSCH_A_FALLBACK_RANGE_RATE_MAX_MPS, ratio_vrel))
+          if direct_vrel_raw == BOSCH_A_DIRECT_VREL_MIN_RAW:
+            vRel = min(vRel, extended)
+          elif direct_vrel_raw == BOSCH_A_DIRECT_VREL_MAX_RAW:
+            vRel = max(vRel, extended)
       else:
         vRel = ratio_vrel
       trustworthy_vrel = True
